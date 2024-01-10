@@ -14,10 +14,9 @@ use std::ptr::copy_nonoverlapping;
 use std::{cmp, result};
 
 use crate::{DescriptorChain, Error};
-use vm_memory::bitmap::{Bitmap, BitmapSlice};
+use vm_memory::bitmap::{BitmapSlice, WithBitmapSlice};
 use vm_memory::{
-    Address, ByteValued, GuestMemory, GuestMemoryMmap, GuestMemoryRegion, VolatileMemory,
-    VolatileSlice,
+    Address, ByteValued, GuestMemory, GuestMemoryRegion, MemoryRegionAddress, VolatileSlice,
 };
 
 pub type Result<T> = result::Result<T, Error>;
@@ -156,15 +155,14 @@ pub struct Reader<'a, B = ()> {
     buffer: DescriptorChainConsumer<'a, B>,
 }
 
-impl<'a, B: Bitmap + BitmapSlice + 'static> Reader<'a, B> {
+impl<'a, B: BitmapSlice> Reader<'a, B> {
     /// Construct a new Reader wrapper over `desc_chain`.
-    pub fn new<M>(
-        mem: &'a GuestMemoryMmap<B>,
-        desc_chain: DescriptorChain<M>,
-    ) -> Result<Reader<'a, B>>
+    pub fn new<M, T>(mem: &'a M, desc_chain: DescriptorChain<T>) -> Result<Reader<'a, B>>
     where
-        M: Deref,
-        M::Target: GuestMemory + Sized,
+        M: GuestMemory,
+        <<M as GuestMemory>::R as GuestMemoryRegion>::B: WithBitmapSlice<'a, S = B>,
+        T: Deref,
+        T::Target: GuestMemory + Sized,
     {
         let mut total_len: usize = 0;
         let buffers = desc_chain
@@ -185,9 +183,8 @@ impl<'a, B: Bitmap + BitmapSlice + 'static> Reader<'a, B> {
                     .checked_sub(region.start_addr().raw_value())
                     .unwrap();
                 region
-                    .deref()
-                    .get_slice(offset.raw_value() as usize, desc.len() as usize)
-                    .map_err(Error::VolatileMemoryError)
+                    .get_slice(MemoryRegionAddress(offset.raw_value()), desc.len() as usize)
+                    .map_err(Error::GuestMemoryError)
             })
             .collect::<Result<VecDeque<VolatileSlice<'a, B>>>>()?;
         Ok(Reader {
@@ -270,15 +267,14 @@ pub struct Writer<'a, B = ()> {
     buffer: DescriptorChainConsumer<'a, B>,
 }
 
-impl<'a, B: Bitmap + BitmapSlice + 'static> Writer<'a, B> {
+impl<'a, B: BitmapSlice> Writer<'a, B> {
     /// Construct a new Writer wrapper over `desc_chain`.
-    pub fn new<M>(
-        mem: &'a GuestMemoryMmap<B>,
-        desc_chain: DescriptorChain<M>,
-    ) -> Result<Writer<'a, B>>
+    pub fn new<M, T>(mem: &'a M, desc_chain: DescriptorChain<T>) -> Result<Writer<'a, B>>
     where
-        M: Deref,
-        M::Target: GuestMemory + Sized,
+        M: GuestMemory,
+        <<M as GuestMemory>::R as GuestMemoryRegion>::B: WithBitmapSlice<'a, S = B>,
+        T: Deref,
+        T::Target: GuestMemory + Sized,
     {
         let mut total_len: usize = 0;
         let buffers = desc_chain
@@ -299,9 +295,8 @@ impl<'a, B: Bitmap + BitmapSlice + 'static> Writer<'a, B> {
                     .checked_sub(region.start_addr().raw_value())
                     .unwrap();
                 region
-                    .deref()
-                    .get_slice(offset.raw_value() as usize, desc.len() as usize)
-                    .map_err(Error::VolatileMemoryError)
+                    .get_slice(MemoryRegionAddress(offset.raw_value()), desc.len() as usize)
+                    .map_err(Error::GuestMemoryError)
             })
             .collect::<Result<VecDeque<VolatileSlice<'a, B>>>>()?;
 
@@ -371,7 +366,7 @@ impl<'a, B: BitmapSlice> io::Write for Writer<'a, B> {
 mod tests {
     use super::*;
     use crate::{Descriptor, Queue, QueueOwnedT, QueueT};
-    use vm_memory::{GuestAddress, Le32};
+    use vm_memory::{GuestAddress, GuestMemoryMmap, Le32};
 
     use crate::mock::MockSplitQueue;
     use virtio_bindings::bindings::virtio_ring::{VRING_DESC_F_NEXT, VRING_DESC_F_WRITE};
